@@ -4,96 +4,91 @@ import calendar
 from datetime import datetime
 import io
 
-# إعداد الصفحة
-st.set_page_config(page_title="Schedule Smart", page_icon="📅", layout="centered")
+st.set_page_config(page_title="Schedule Smart v1.7", page_icon="📊", layout="wide")
 
-# تصحيح الجزء الخاص بالتنسيق (CSS)
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stButton>button { width: 100%; border-radius: 10px; height: 3em; background-color: #1F4E78; color: white; }
-    .stDownloadButton>button { width: 100%; border-radius: 10px; background-color: #2E7D32; color: white; }
-    </style>
-    """, unsafe_allow_html=True) # تم تعديل هذا السطر هنا
+# --- دالة حساب الإحصائيات (تلقائية عند التعديل) ---
+def calculate_stats(df, names):
+    stats = []
+    for name in names:
+        # حساب التكرارات لكل ممرض من الجدول (سواء الأصلي أو المعدل)
+        shifts = df[name].value_counts()
+        m_count = shifts.get('M', 0)
+        l_count = shifts.get('L', 0)
+        n_count = shifts.get('N', 0)
+        o_count = shifts.get('O', 0)
+        
+        # الحساب: M=6h, L=12h, N=12h
+        total_hours = (m_count * 6) + (l_count * 12) + (n_count * 12)
+        total_shifts = m_count + l_count + n_count
+        
+        stats.append({
+            "الممرض": name,
+            "M (6h)": m_count,
+            "L (12h)": l_count,
+            "N (12h)": n_count,
+            "ساعات العمل": total_hours,
+            "إجمالي الشفتات": total_shifts
+        })
+    return pd.DataFrame(stats)
 
-st.title("📅 Schedule Smart v1.4")
-st.write("نسخة الموبايل - نظام توزيع الورديات الذكي")
+st.title("📊 Schedule Smart v1.7")
+st.info("💡 يمكنك الآن التعديل مباشرة داخل الجدول وسيقوم البرنامج بإعادة حساب الساعات فوراً!")
 
-# --- مدخلات المستخدم ---
-with st.expander("👥 إعداد الموظفين والأنماط", expanded=True):
-    names_input = st.text_area("Staff Names (Separate by comma):", 
-                              "Mohamed, Ali, Ahmed, Hassan, Sayed, Yassin, Osama")
+# --- المدخلات ---
+with st.sidebar:
+    st.header("⚙️ إعدادات الجدول")
+    names_input = st.text_area("أسماء الطاقم (فواصل):", "Mohamed, Ali, Ahmed")
+    patterns_input = st.text_area("الأنماط (فاصلة |):", "M,L,N,O | M,L,N,O | M,L,N,O")
     
-    patterns_input = st.text_area("Individual Patterns (Separate each by | ):", 
-                                 "M,L,L,N,N,O,O | M,L,L,N,N,O,O | M,L,L,N,N,O,O")
-
-with st.expander("📅 اختيار التاريخ", expanded=True):
     col1, col2 = st.columns(2)
-    with col1:
-        month = st.selectbox("الشهر", list(range(1, 13)), index=datetime.now().month - 1)
-    with col2:
-        year = st.selectbox("السنة", [2025, 2026, 2027], index=1)
+    month = col1.selectbox("الشهر", list(range(1, 13)), index=datetime.now().month - 1)
+    year = col2.selectbox("السنة", [2025, 2026, 2027], index=1)
 
-# --- معالجة البيانات وإنشاء الملف ---
-if st.button("🚀 إنشاء الجدول الاحترافي"):
-    try:
-        names = [n.strip() for n in names_input.split(",") if n.strip()]
-        patterns_raw = [p.strip().upper() for p in patterns_input.split("|") if p.strip()]
+# --- معالجة البيانات ---
+names = [n.strip() for n in names_input.split(",") if n.strip()]
+patterns_raw = [p.strip().upper() for p in patterns_input.split("|") if p.strip()]
 
-        if len(names) != len(patterns_raw):
-            st.error(f"⚠️ خطأ: عدد الأسماء ({len(names)}) لا يطابق عدد الأنماط ({len(patterns_raw)})!")
-        else:
-            num_days = calendar.monthrange(year, month)[1]
-            dates = pd.date_range(start=f"{year}-{month}-01", periods=num_days)
-            
-            data = []
-            headers = ["Date", "Day"] + names
-            for d_idx in range(num_days):
-                row = [dates[d_idx].strftime('%d-%m-%Y'), dates[d_idx].day_name()]
-                for p_idx, p_str in enumerate(patterns_raw):
-                    p_list = [s.strip() for s in p_str.split(",")]
-                    row.append(p_list[d_idx % len(p_list)])
-                data.append(row)
-            
-            df = pd.DataFrame(data, columns=headers)
+if len(names) == len(patterns_raw) and names:
+    num_days = calendar.monthrange(year, month)[1]
+    dates = pd.date_range(start=f"{year}-{month}-01", periods=num_days)
+    
+    # 1. توليد البيانات الأولية
+    initial_data = []
+    for d_idx in range(num_days):
+        row = {"Date": dates[d_idx].strftime('%d-%m'), "Day": dates[d_idx].day_name()[:3]}
+        for p_idx, name in enumerate(names):
+            p_list = [s.strip() for s in patterns_raw[p_idx].split(",")]
+            row[name] = p_list[d_idx % len(p_list)]
+        initial_data.append(row)
+    
+    df_initial = pd.DataFrame(initial_data)
 
-            # إنشاء ملف الإكسيل في الذاكرة بنفس تنسيقاتك السابقة
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                df.to_excel(writer, index=False, sheet_name='Nursing_Shifts', startrow=1)
-                workbook = writer.book
-                worksheet = writer.sheets['Nursing_Shifts']
+    # 2. ميزة التعديل الذاتي (Data Editor)
+    st.write("### 📝 جدول الورديات (اضغط على أي خانة للتعديل)")
+    # هذا المكون يسمح للمستخدم بتغيير القيم يدوياً
+    df_edited = st.data_editor(df_initial, use_container_width=True, hide_index=True)
 
-                # تنسيق العناوين والألوان
-                header_fmt = workbook.add_format({'bold': True, 'bg_color': '#002060', 'font_color': 'white', 'border': 2, 'align': 'center'})
-                worksheet.set_column(0, 1, 15)
-                worksheet.set_column(2, len(headers)-1, 18)
+    # 3. حساب الإحصائيات بناءً على الجدول المعدل
+    st.write("### 📈 إحصائيات الساعات المحدثة")
+    df_stats = calculate_stats(df_edited, names)
+    st.table(df_stats)
 
-                colors_map = {'M': '#92D050', 'L': '#FFC000', 'N': '#FF0000', 'O': '#D9D9D9'}
-                for col_num, value in enumerate(df.columns.values):
-                    worksheet.write(1, col_num, value, header_fmt)
+    # --- تصدير الإكسيل ---
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df_edited.to_excel(writer, sheet_name='Roster', index=False)
+        df_stats.to_excel(writer, sheet_name='Stats', index=False)
+        
+        workbook = writer.book
+        worksheet = writer.sheets['Roster']
+        # تنسيق الألوان للأرقام والحروف
+        colors = {'M': '#92D050', 'L': '#FFC000', 'N': '#FF0000', 'O': '#D9D9D9'}
+        for key, color in colors.items():
+            fmt = workbook.add_format({'bg_color': color, 'border': 1})
+            worksheet.conditional_format(1, 2, num_days, len(names)+1, 
+                                       {'type': 'text', 'criteria': 'containing', 'value': key, 'format': fmt})
 
-                for key, color in colors_map.items():
-                    fmt = workbook.add_format({'bg_color': color, 'border': 1, 'align': 'center', 'bold': True})
-                    if key == 'N': fmt.set_font_color('white')
-                    worksheet.conditional_format(2, 2, num_days+1, len(headers)-1, 
-                                               {'type': 'text', 'criteria': 'containing', 'value': key, 'format': fmt})
-
-                worksheet.freeze_panes(2, 2)
-
-            st.success("✅ تم إنشاء الملف بنجاح!")
-            
-            st.download_button(
-                label="📥 تحميل ملف الإكسيل",
-                data=output.getvalue(),
-                file_name=f"ScheduleSmart_{month}_{year}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-            st.write("### معاينة الجدول:")
-            st.dataframe(df)
-
-    except Exception as e:
-        st.error(f"حدث خطأ غير متوقع: {e}")
-
-st.info("💡 ملاحظة: لكل فرد نمط خاص، افصل بين الأنماط باستخدام العلامة |")
+    st.download_button("📥 تحميل الجدول النهائي (المعدل يدوياً)", output.getvalue(), 
+                       file_name=f"Roster_Updated_{month}.xlsx", mime="application/vnd.ms-excel")
+else:
+    st.warning("الرجاء التأكد من تطابق عدد الأسماء مع عدد الأنماط.")
